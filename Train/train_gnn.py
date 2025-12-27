@@ -17,25 +17,13 @@ from torch_geometric.loader import DataLoader as PyGDataLoader
 import wandb
 
 from DataUtils.graph_preprocessing import MoleculeGraphDataset
-from DataUtils.utils import scaffold_split
+from DataUtils.utils import scaffold_split, load_data
 from Models.dmpnn import DMPNN, create_dmpnn_ensemble
 from Train.validate_gnn import (
     validate_gnn,
     validate_gnn_with_uncertainty,
     validate_gnn_ensemble,
 )
-
-
-def load_data(
-    data_path: str,
-    smiles_column: str = "SMILES",
-    target_column: str = "Solubility",
-) -> Tuple[List[str], np.ndarray]:
-    """Load data from CSV file."""
-    df = pd.read_csv(data_path)
-    smiles_list = df[smiles_column].tolist()
-    targets = df[target_column].values.astype(np.float32)
-    return smiles_list, targets
 
 
 def create_dataloaders(

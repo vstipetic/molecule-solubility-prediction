@@ -419,3 +419,107 @@ class SubsetDataset(Dataset):
         self.mode = mode
         if mode == "fingerprint" and self._fingerprints is None:
             self._precompute_fingerprints()
+
+
+class ZINCDataset(Dataset):
+    """Dataset for ZINC SMILES strings for MLM pretraining.
+
+    Used for masked language modeling pretraining of transformers.
+
+    Args:
+        smiles_list: List of SMILES strings.
+        tokenizer: SMILESTokenizer instance for encoding SMILES.
+        max_length: Maximum sequence length for tokenization.
+    """
+
+    def __init__(
+        self,
+        smiles_list: List[str],
+        tokenizer: "SMILESTokenizer",  # Forward reference to avoid circular import
+        max_length: int = 512,
+    ) -> None:
+        super().__init__()
+        self.smiles_list = smiles_list
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+
+    def __len__(self) -> int:
+        return len(self.smiles_list)
+
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        """Get encoded SMILES for MLM training.
+
+        Returns:
+            Dictionary with 'input_ids' and 'attention_mask' tensors.
+        """
+        smiles = self.smiles_list[idx]
+        encoded = self.tokenizer.encode(smiles, max_length=self.max_length)
+        return {
+            'input_ids': encoded['input_ids'],
+            'attention_mask': encoded['attention_mask'],
+        }
+
+
+class TransformerSolubilityDataset(Dataset):
+    """Dataset for solubility regression with transformer tokenizers.
+
+    Supports both scratch-trained SMILESTokenizer and HuggingFace tokenizers
+    (e.g., ChemBERTa). This unifies SolubilityDataset and SMILESDataset.
+
+    Args:
+        smiles_list: List of SMILES strings.
+        targets: Numpy array of target values.
+        tokenizer: Tokenizer instance (SMILESTokenizer or HuggingFace).
+        max_length: Maximum sequence length for tokenization.
+        is_huggingface: Whether tokenizer is HuggingFace-based (uses different API).
+    """
+
+    def __init__(
+        self,
+        smiles_list: List[str],
+        targets: np.ndarray,
+        tokenizer: Union["SMILESTokenizer", "PreTrainedTokenizer"],  # Forward refs
+        max_length: int = 512,
+        is_huggingface: bool = False,
+    ) -> None:
+        super().__init__()
+        self.smiles_list = smiles_list
+        self.targets = targets.astype(np.float32)
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+        self.is_huggingface = is_huggingface
+
+    def __len__(self) -> int:
+        return len(self.smiles_list)
+
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        """Get tokenized SMILES with target for solubility prediction.
+
+        Returns:
+            Dictionary with 'input_ids', 'attention_mask', and 'labels' tensors.
+        """
+        smiles = self.smiles_list[idx]
+        target = self.targets[idx]
+
+        if self.is_huggingface:
+            # HuggingFace tokenizers return BatchEncoding
+            encoded = self.tokenizer(
+                smiles,
+                padding='max_length',
+                truncation=True,
+                max_length=self.max_length,
+                return_tensors='pt',
+            )
+            return {
+                'input_ids': encoded['input_ids'].squeeze(0),
+                'attention_mask': encoded['attention_mask'].squeeze(0),
+                'labels': torch.tensor(target, dtype=torch.float32),
+            }
+        else:
+            # Custom SMILESTokenizer
+            encoded = self.tokenizer.encode(smiles, max_length=self.max_length)
+            return {
+                'input_ids': encoded['input_ids'],
+                'attention_mask': encoded['attention_mask'],
+                'labels': torch.tensor(target, dtype=torch.float32),
+            }

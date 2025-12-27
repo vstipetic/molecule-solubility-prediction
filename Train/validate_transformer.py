@@ -9,79 +9,14 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 import wandb
 
 from Models.transformer import MoleculeTransformer, SMILESTokenizer
 from Models.chemberta import ChemBERTaForSolubility
-
-
-class SMILESDataset(Dataset):
-    """Simple dataset for SMILES strings and targets."""
-
-    def __init__(
-        self,
-        smiles_list: List[str],
-        targets: np.ndarray,
-        tokenizer: Union[SMILESTokenizer, None],
-        max_length: int = 512,
-    ) -> None:
-        self.smiles_list = smiles_list
-        self.targets = targets.astype(np.float32)
-        self.tokenizer = tokenizer
-        self.max_length = max_length
-
-    def __len__(self) -> int:
-        return len(self.smiles_list)
-
-    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        smiles = self.smiles_list[idx]
-        target = self.targets[idx]
-
-        if self.tokenizer is not None:
-            encoded = self.tokenizer.encode(smiles, max_length=self.max_length)
-        else:
-            encoded = {'input_ids': torch.tensor([]), 'attention_mask': torch.tensor([])}
-
-        return {
-            'input_ids': encoded['input_ids'],
-            'attention_mask': encoded['attention_mask'],
-            'labels': torch.tensor(target, dtype=torch.float32),
-            'smiles': smiles,
-        }
-
-
-def compute_metrics(
-    predictions: np.ndarray,
-    targets: np.ndarray,
-) -> Dict[str, float]:
-    """Compute regression metrics."""
-    rmse = np.sqrt(np.mean((predictions - targets) ** 2))
-    mae = np.mean(np.abs(predictions - targets))
-    return {'rmse': rmse, 'mae': mae}
-
-
-def compute_calibration_metrics(
-    predictions: np.ndarray,
-    uncertainties: np.ndarray,
-    targets: np.ndarray,
-) -> Dict[str, float]:
-    """Compute uncertainty calibration metrics."""
-    normalized_errors = (targets - predictions) / (uncertainties + 1e-8)
-
-    calibration = {}
-    for confidence in [0.5, 0.9, 0.95]:
-        z_score = {0.5: 0.674, 0.9: 1.645, 0.95: 1.96}[confidence]
-        within = np.abs(normalized_errors) <= z_score
-        calibration[f'coverage_{int(confidence*100)}'] = within.mean()
-
-    nll = 0.5 * np.mean(
-        np.log(2 * np.pi * uncertainties ** 2 + 1e-8)
-        + (targets - predictions) ** 2 / (uncertainties ** 2 + 1e-8)
-    )
-    calibration['nll'] = nll
-
-    return calibration
+from DataUtils.metrics import compute_metrics, compute_calibration_metrics
+from DataUtils.datasets import TransformerSolubilityDataset
+from DataUtils.collate import transformer_collate_fn
 
 
 def validate_transformer(
@@ -354,25 +289,19 @@ def create_transformer_dataloader(
     Returns:
         DataLoader for transformer model.
     """
-    dataset = SMILESDataset(
+    dataset = TransformerSolubilityDataset(
         smiles_list=smiles_list,
         targets=targets,
         tokenizer=tokenizer,
         max_length=max_length,
+        is_huggingface=False,
     )
-
-    def collate_fn(batch):
-        return {
-            'input_ids': torch.stack([item['input_ids'] for item in batch]),
-            'attention_mask': torch.stack([item['attention_mask'] for item in batch]),
-            'labels': torch.stack([item['labels'] for item in batch]),
-        }
 
     dataloader = DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=shuffle,
-        collate_fn=collate_fn,
+        collate_fn=transformer_collate_fn,
     )
 
     return dataloader

@@ -10,75 +10,7 @@ import numpy as np
 import wandb
 
 from Models.random_forest import ECFPRandomForest
-
-
-def compute_metrics(
-    predictions: np.ndarray,
-    targets: np.ndarray,
-) -> Dict[str, float]:
-    """Compute regression metrics.
-
-    Args:
-        predictions: Model predictions.
-        targets: Ground truth values.
-
-    Returns:
-        Dictionary with RMSE and MAE metrics.
-    """
-    # Filter out NaN predictions
-    valid_mask = ~np.isnan(predictions)
-    preds = predictions[valid_mask]
-    targs = targets[valid_mask]
-
-    if len(preds) == 0:
-        return {'rmse': float('inf'), 'mae': float('inf')}
-
-    rmse = np.sqrt(np.mean((preds - targs) ** 2))
-    mae = np.mean(np.abs(preds - targs))
-
-    return {'rmse': rmse, 'mae': mae}
-
-
-def compute_calibration_metrics(
-    predictions: np.ndarray,
-    uncertainties: np.ndarray,
-    targets: np.ndarray,
-) -> Dict[str, float]:
-    """Compute uncertainty calibration metrics.
-
-    Args:
-        predictions: Mean predictions.
-        uncertainties: Standard deviation estimates.
-        targets: Ground truth values.
-
-    Returns:
-        Dictionary with calibration metrics.
-    """
-    valid_mask = ~np.isnan(predictions)
-    preds = predictions[valid_mask]
-    stds = uncertainties[valid_mask]
-    targs = targets[valid_mask]
-
-    if len(preds) == 0:
-        return {}
-
-    # Normalized error (should be ~N(0,1) if well-calibrated)
-    normalized_errors = (targs - preds) / (stds + 1e-8)
-
-    # Calibration: percentage of points within different confidence intervals
-    calibration = {}
-    for confidence in [0.5, 0.9, 0.95]:
-        z_score = {0.5: 0.674, 0.9: 1.645, 0.95: 1.96}[confidence]
-        within = np.abs(normalized_errors) <= z_score
-        calibration[f'coverage_{int(confidence*100)}'] = within.mean()
-
-    # Negative log-likelihood (assuming Gaussian)
-    nll = 0.5 * np.mean(
-        np.log(2 * np.pi * stds ** 2) + (targs - preds) ** 2 / (stds ** 2 + 1e-8)
-    )
-    calibration['nll'] = nll
-
-    return calibration
+from DataUtils.metrics import compute_metrics, compute_calibration_metrics
 
 
 def validate_random_forest(

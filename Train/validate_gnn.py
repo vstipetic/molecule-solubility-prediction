@@ -16,60 +16,7 @@ import wandb
 from Models.dmpnn import DMPNN, ensemble_predict
 from Models.layers import set_mc_dropout
 from DataUtils.graph_preprocessing import MoleculeGraphDataset
-
-
-def compute_metrics(
-    predictions: np.ndarray,
-    targets: np.ndarray,
-) -> Dict[str, float]:
-    """Compute regression metrics.
-
-    Args:
-        predictions: Model predictions.
-        targets: Ground truth values.
-
-    Returns:
-        Dictionary with RMSE and MAE metrics.
-    """
-    rmse = np.sqrt(np.mean((predictions - targets) ** 2))
-    mae = np.mean(np.abs(predictions - targets))
-
-    return {'rmse': rmse, 'mae': mae}
-
-
-def compute_calibration_metrics(
-    predictions: np.ndarray,
-    uncertainties: np.ndarray,
-    targets: np.ndarray,
-) -> Dict[str, float]:
-    """Compute uncertainty calibration metrics.
-
-    Args:
-        predictions: Mean predictions.
-        uncertainties: Standard deviation estimates.
-        targets: Ground truth values.
-
-    Returns:
-        Dictionary with calibration metrics.
-    """
-    # Normalized error
-    normalized_errors = (targets - predictions) / (uncertainties + 1e-8)
-
-    # Calibration coverage
-    calibration = {}
-    for confidence in [0.5, 0.9, 0.95]:
-        z_score = {0.5: 0.674, 0.9: 1.645, 0.95: 1.96}[confidence]
-        within = np.abs(normalized_errors) <= z_score
-        calibration[f'coverage_{int(confidence*100)}'] = within.mean()
-
-    # Negative log-likelihood
-    nll = 0.5 * np.mean(
-        np.log(2 * np.pi * uncertainties ** 2 + 1e-8)
-        + (targets - predictions) ** 2 / (uncertainties ** 2 + 1e-8)
-    )
-    calibration['nll'] = nll
-
-    return calibration
+from DataUtils.metrics import compute_metrics, compute_calibration_metrics
 
 
 def validate_gnn(

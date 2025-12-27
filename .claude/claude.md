@@ -15,12 +15,16 @@ molecule-solubility-prediction/
 │   ├── transformer.py               # Transformer from scratch
 │   └── chemberta.py                 # ChemBERTa-77M fine-tuning
 ├── DataUtils/
-│   ├── utils.py                     # Shared utility functions
-│   ├── datasets.py                  # Dataset classes (AqSolDB, ESOL)
-│   └── graph_preprocessing.py       # SMILES to graph conversion
+│   ├── utils.py                     # Shared utility functions (load_data, scaffold_split, etc.)
+│   ├── datasets.py                  # Dataset classes (AqSolDB, ESOL, ZINCDataset, etc.)
+│   ├── graph_preprocessing.py       # SMILES to graph conversion
+│   ├── metrics.py                   # Shared metrics (compute_metrics, compute_calibration_metrics)
+│   ├── collate.py                   # Collate functions for DataLoaders
+│   └── prepare_data.py              # Script to prepare train/val/test CSV splits
 ├── Train/
 │   ├── pretrain_transformer.py      # Pretrain on ZINC-1M
-│   ├── finetune_transformer.py      # Fine-tune transformers
+│   ├── finetune_transformer.py      # Fine-tune scratch transformer
+│   ├── finetune_chemberta.py        # Fine-tune ChemBERTa
 │   ├── train_gnn.py                 # Train D-MPNN
 │   ├── train_random_forest.py       # Train Random Forest
 │   ├── validate_transformer.py      # Validation for transformers

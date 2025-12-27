@@ -9,37 +9,15 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
-import pandas as pd
 import wandb
 
 from DataUtils.datasets import AqSolDBDataset
-from DataUtils.utils import scaffold_split
+from DataUtils.utils import scaffold_split, load_data
 from Models.random_forest import ECFPRandomForest
 from Train.validate_random_forest import (
     validate_random_forest,
     validate_random_forest_with_uncertainty,
 )
-
-
-def load_data(
-    data_path: str,
-    smiles_column: str = "SMILES",
-    target_column: str = "Solubility",
-) -> Tuple[List[str], np.ndarray]:
-    """Load data from CSV file.
-
-    Args:
-        data_path: Path to CSV file.
-        smiles_column: Name of SMILES column.
-        target_column: Name of target column.
-
-    Returns:
-        Tuple of (smiles_list, targets).
-    """
-    df = pd.read_csv(data_path)
-    smiles_list = df[smiles_column].tolist()
-    targets = df[target_column].values.astype(np.float32)
-    return smiles_list, targets
 
 
 def train_random_forest(

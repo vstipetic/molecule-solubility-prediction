@@ -21,60 +21,9 @@ from Models.transformer import (
     SMILESTokenizer,
     create_mlm_inputs,
 )
-
-
-class ZINCDataset(Dataset):
-    """Dataset for ZINC SMILES strings for MLM pretraining."""
-
-    def __init__(
-        self,
-        smiles_list: List[str],
-        tokenizer: SMILESTokenizer,
-        max_length: int = 512,
-    ) -> None:
-        self.smiles_list = smiles_list
-        self.tokenizer = tokenizer
-        self.max_length = max_length
-
-    def __len__(self) -> int:
-        return len(self.smiles_list)
-
-    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        smiles = self.smiles_list[idx]
-        encoded = self.tokenizer.encode(smiles, max_length=self.max_length)
-        return {
-            'input_ids': encoded['input_ids'],
-            'attention_mask': encoded['attention_mask'],
-        }
-
-
-def load_zinc_data(data_path: str, max_samples: Optional[int] = None) -> List[str]:
-    """Load ZINC SMILES data.
-
-    Args:
-        data_path: Path to ZINC data file (CSV or txt with SMILES).
-        max_samples: Maximum number of samples to load.
-
-    Returns:
-        List of SMILES strings.
-    """
-    if data_path.endswith('.csv'):
-        df = pd.read_csv(data_path)
-        # Try common column names
-        for col in ['smiles', 'SMILES', 'Smiles', 'canonical_smiles']:
-            if col in df.columns:
-                smiles_list = df[col].tolist()
-                break
-        else:
-            smiles_list = df.iloc[:, 0].tolist()
-    else:
-        with open(data_path, 'r') as f:
-            smiles_list = [line.strip() for line in f if line.strip()]
-
-    if max_samples is not None:
-        smiles_list = smiles_list[:max_samples]
-
-    return smiles_list
+from DataUtils.datasets import ZINCDataset
+from DataUtils.utils import load_zinc_data
+from DataUtils.collate import transformer_collate_fn
 
 
 def build_vocab_from_data(smiles_list: List[str], tokenizer: SMILESTokenizer) -> SMILESTokenizer:
@@ -99,14 +48,6 @@ def build_vocab_from_data(smiles_list: List[str], tokenizer: SMILESTokenizer) ->
         tokenizer.add_tokens(list(new_tokens))
 
     return tokenizer
-
-
-def collate_fn(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
-    """Collate function for DataLoader."""
-    return {
-        'input_ids': torch.stack([item['input_ids'] for item in batch]),
-        'attention_mask': torch.stack([item['attention_mask'] for item in batch]),
-    }
 
 
 def train_epoch_mlm(
@@ -434,7 +375,7 @@ def main():
     train_dataset = ZINCDataset(train_smiles, tokenizer, args.max_length)
     train_loader = DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=True,
-        collate_fn=collate_fn, num_workers=4, pin_memory=True
+        collate_fn=transformer_collate_fn, num_workers=4, pin_memory=True
     )
 
     val_loader = None
@@ -442,7 +383,7 @@ def main():
         val_dataset = ZINCDataset(val_smiles, tokenizer, args.max_length)
         val_loader = DataLoader(
             val_dataset, batch_size=args.batch_size, shuffle=False,
-            collate_fn=collate_fn, num_workers=4
+            collate_fn=transformer_collate_fn, num_workers=4
         )
 
     # Pretrain

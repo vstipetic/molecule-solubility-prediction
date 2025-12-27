@@ -1,7 +1,7 @@
-"""Fine-tuning script for scratch-trained Transformer on solubility prediction.
+"""Fine-tuning script for ChemBERTa model on solubility prediction.
 
-This script fine-tunes a MoleculeTransformer that was pretrained on ZINC-1M
-for the AqSolDB solubility prediction task.
+This script fine-tunes the pretrained ChemBERTa model (seyonec/ChemBERTa-zinc-base-v1)
+on the AqSolDB solubility dataset.
 """
 
 import argparse
@@ -18,11 +18,10 @@ import wandb
 from DataUtils.utils import scaffold_split, load_data
 from DataUtils.datasets import TransformerSolubilityDataset
 from DataUtils.collate import transformer_collate_fn
-from Models.transformer import MoleculeTransformer, SMILESTokenizer
+from Models.chemberta import ChemBERTaForSolubility
 from Train.validate_transformer import (
-    validate_transformer,
-    validate_transformer_with_uncertainty,
-    create_transformer_dataloader,
+    validate_chemberta,
+    validate_chemberta_with_uncertainty,
 )
 
 
@@ -31,7 +30,7 @@ def create_dataloaders(
     train_targets: np.ndarray,
     val_smiles: List[str],
     val_targets: np.ndarray,
-    tokenizer: SMILESTokenizer,
+    tokenizer,
     batch_size: int = 32,
     max_length: int = 512,
 ) -> Tuple[DataLoader, DataLoader]:
@@ -42,7 +41,7 @@ def create_dataloaders(
         train_targets: Training targets.
         val_smiles: Validation SMILES strings.
         val_targets: Validation targets.
-        tokenizer: SMILES tokenizer.
+        tokenizer: HuggingFace tokenizer from ChemBERTa.
         batch_size: Batch size.
         max_length: Maximum sequence length.
 
@@ -50,10 +49,10 @@ def create_dataloaders(
         Tuple of (train_loader, val_loader).
     """
     train_dataset = TransformerSolubilityDataset(
-        train_smiles, train_targets, tokenizer, max_length, is_huggingface=False
+        train_smiles, train_targets, tokenizer, max_length, is_huggingface=True
     )
     val_dataset = TransformerSolubilityDataset(
-        val_smiles, val_targets, tokenizer, max_length, is_huggingface=False
+        val_smiles, val_targets, tokenizer, max_length, is_huggingface=True
     )
 
     train_loader = DataLoader(
@@ -67,7 +66,7 @@ def create_dataloaders(
 
 
 def train_epoch(
-    model: MoleculeTransformer,
+    model: nn.Module,
     train_loader: DataLoader,
     optimizer: optim.Optimizer,
     criterion: nn.Module,
@@ -78,7 +77,7 @@ def train_epoch(
     """Train for one epoch.
 
     Args:
-        model: MoleculeTransformer model.
+        model: ChemBERTaForSolubility model.
         train_loader: Training DataLoader.
         optimizer: Optimizer.
         criterion: Loss function.
@@ -120,21 +119,21 @@ def train_epoch(
     return total_loss / n_batches
 
 
-def finetune_transformer(
-    model: MoleculeTransformer,
+def finetune_chemberta(
+    model: ChemBERTaForSolubility,
     train_loader: DataLoader,
     val_loader: DataLoader,
-    learning_rate: float = 1e-4,
+    learning_rate: float = 1e-5,
     weight_decay: float = 0.01,
     n_epochs: int = 50,
     patience: int = 10,
     device: torch.device = None,
     log_to_wandb: bool = True,
-) -> MoleculeTransformer:
-    """Fine-tune transformer model.
+) -> ChemBERTaForSolubility:
+    """Fine-tune ChemBERTa model.
 
     Args:
-        model: MoleculeTransformer model.
+        model: ChemBERTaForSolubility model.
         train_loader: Training DataLoader.
         val_loader: Validation DataLoader.
         learning_rate: Learning rate.
@@ -226,49 +225,13 @@ def finetune_transformer(
     return model
 
 
-def load_pretrained_transformer(
-    checkpoint_path: str,
-    device: torch.device = None,
-) -> Tuple[MoleculeTransformer, SMILESTokenizer]:
-    """Load pretrained transformer from checkpoint.
-
-    Args:
-        checkpoint_path: Path to checkpoint.
-        device: Device.
-
-    Returns:
-        Tuple of (model, tokenizer).
-    """
-    if device is None:
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-    checkpoint = torch.load(checkpoint_path, map_location=device)
-
-    # Restore tokenizer
-    tokenizer = SMILESTokenizer(vocab=checkpoint['tokenizer_vocab'])
-
-    # Create model with saved config
-    config = checkpoint['config']
-    model = MoleculeTransformer(
-        vocab_size=tokenizer.vocab_size,
-        **config
-    )
-
-    # Load weights
-    model.load_state_dict(checkpoint['model_state_dict'])
-
-    return model, tokenizer
-
-
 def main():
-    parser = argparse.ArgumentParser(description="Fine-tune Transformer for solubility")
-    parser.add_argument("--pretrained-path", type=str, required=True,
-                        help="Path to pretrained model checkpoint")
+    parser = argparse.ArgumentParser(description="Fine-tune ChemBERTa for solubility")
     parser.add_argument("--data-path", type=str, required=True,
                         help="Path to training data CSV")
     parser.add_argument("--smiles-column", type=str, default="SMILES")
     parser.add_argument("--target-column", type=str, default="Solubility")
-    parser.add_argument("--learning-rate", type=float, default=1e-4)
+    parser.add_argument("--learning-rate", type=float, default=1e-5)
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--n-epochs", type=int, default=50)
@@ -276,6 +239,11 @@ def main():
     parser.add_argument("--max-length", type=int, default=512)
     parser.add_argument("--train-ratio", type=float, default=0.8)
     parser.add_argument("--val-ratio", type=float, default=0.1)
+    parser.add_argument("--freeze-encoder", action="store_true",
+                        help="Freeze encoder layers")
+    parser.add_argument("--freeze-layers", type=int, default=None,
+                        help="Number of encoder layers to freeze")
+    parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--mc-samples", type=int, default=100,
                         help="MC dropout samples")
     parser.add_argument("--save-path", type=str, default=None)
@@ -293,7 +261,7 @@ def main():
     if not args.no_wandb:
         wandb.init(
             project=args.wandb_project,
-            name=args.wandb_name or "finetune_transformer",
+            name=args.wandb_name or "finetune_chemberta",
             config=vars(args),
             job_type="finetune",
         )
@@ -314,9 +282,17 @@ def main():
 
     print(f"Train: {len(train_smiles)}, Val: {len(val_smiles)}, Test: {len(test_smiles)}")
 
-    # Load pretrained model
-    print(f"Loading pretrained transformer from {args.pretrained_path}...")
-    model, tokenizer = load_pretrained_transformer(args.pretrained_path, device)
+    # Create model
+    print("Loading ChemBERTa model...")
+    model = ChemBERTaForSolubility(
+        dropout=args.dropout,
+        freeze_encoder=args.freeze_encoder,
+    )
+    tokenizer = model.tokenizer
+
+    if args.freeze_layers is not None:
+        model.freeze_encoder_layers(args.freeze_layers)
+        print(f"Froze {args.freeze_layers} encoder layers")
 
     # Create dataloaders
     train_loader, val_loader = create_dataloaders(
@@ -327,17 +303,18 @@ def main():
         max_length=args.max_length,
     )
 
-    # Create test loader
-    test_loader = create_transformer_dataloader(
-        test_smiles, test_targets, tokenizer,
-        batch_size=args.batch_size,
-        max_length=args.max_length,
-        shuffle=False,
+    # Create test dataset
+    test_dataset = TransformerSolubilityDataset(
+        test_smiles, test_targets, tokenizer, args.max_length, is_huggingface=True
+    )
+    test_loader = DataLoader(
+        test_dataset, batch_size=args.batch_size, shuffle=False,
+        collate_fn=transformer_collate_fn
     )
 
     # Fine-tune
-    print("\nFine-tuning model...")
-    model = finetune_transformer(
+    print("\nFine-tuning ChemBERTa...")
+    model = finetune_chemberta(
         model, train_loader, val_loader,
         learning_rate=args.learning_rate,
         weight_decay=args.weight_decay,
@@ -349,9 +326,11 @@ def main():
 
     # Evaluate on test set with uncertainty
     print("\nEvaluating on test set with MC dropout...")
-    test_metrics = validate_transformer_with_uncertainty(
-        model, test_loader, device,
+    test_metrics = validate_chemberta_with_uncertainty(
+        model, test_smiles, test_targets,
         n_samples=args.mc_samples,
+        batch_size=args.batch_size,
+        device=device,
         log_to_wandb=not args.no_wandb,
         prefix='test'
     )
@@ -363,12 +342,7 @@ def main():
     if args.save_path:
         save_path = Path(args.save_path)
         save_path.parent.mkdir(parents=True, exist_ok=True)
-
-        torch.save({
-            'model_state_dict': model.state_dict(),
-            'tokenizer_vocab': tokenizer.vocab,
-        }, save_path)
-
+        model.save_pretrained(str(save_path))
         print(f"Model saved to {save_path}")
 
         if not args.no_wandb and wandb.run is not None:

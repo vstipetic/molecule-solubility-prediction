@@ -289,3 +289,63 @@ def get_bond_feature_dim() -> int:
     """
     # Bond type + conjugation + ring + stereo
     return len(BOND_TYPES) + 1 + 1 + 1
+
+
+def load_data(
+    data_path: str,
+    smiles_column: str = "SMILES",
+    target_column: str = "Solubility",
+) -> Tuple[List[str], np.ndarray]:
+    """Load molecular data from CSV file.
+
+    Args:
+        data_path: Path to CSV file.
+        smiles_column: Name of column containing SMILES strings.
+        target_column: Name of column containing target values.
+
+    Returns:
+        Tuple of (smiles_list, targets_array).
+    """
+    import pandas as pd
+
+    df = pd.read_csv(data_path)
+    smiles_list = df[smiles_column].tolist()
+    targets = df[target_column].values.astype(np.float32)
+    return smiles_list, targets
+
+
+def load_zinc_data(
+    data_path: str,
+    max_samples: Optional[int] = None,
+) -> List[str]:
+    """Load ZINC SMILES data from CSV or text file.
+
+    Automatically detects SMILES column by trying common column names.
+
+    Args:
+        data_path: Path to ZINC data file (CSV or txt with SMILES).
+        max_samples: Maximum number of samples to load.
+
+    Returns:
+        List of SMILES strings.
+    """
+    import pandas as pd
+
+    if data_path.endswith('.csv'):
+        df = pd.read_csv(data_path)
+        # Try common column names
+        for col in ['smiles', 'SMILES', 'Smiles', 'canonical_smiles']:
+            if col in df.columns:
+                smiles_list = df[col].tolist()
+                break
+        else:
+            # Fall back to first column
+            smiles_list = df.iloc[:, 0].tolist()
+    else:
+        with open(data_path, 'r') as f:
+            smiles_list = [line.strip() for line in f if line.strip()]
+
+    if max_samples is not None:
+        smiles_list = smiles_list[:max_samples]
+
+    return smiles_list
