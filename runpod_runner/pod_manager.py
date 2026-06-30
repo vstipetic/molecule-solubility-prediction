@@ -16,7 +16,10 @@ import os
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-import runpod
+try:
+    import runpod
+except ImportError:  # pragma: no cover - optional dependency
+    runpod = None  # type: ignore[assignment]
 
 DEFAULT_GPU_TYPE = "NVIDIA RTX A6000"
 DEFAULT_IMAGE = "runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04"
@@ -35,6 +38,11 @@ class PodManager:
     """Manage a single RunPod training pod."""
 
     def __init__(self, api_key: Optional[str] = None) -> None:
+        if runpod is None:
+            raise RuntimeError(
+                "runpod is required for pod management. Install with "
+                "`uv sync --extra runpod`."
+            )
         key = api_key or os.environ.get("RUNPOD_API_KEY")
         if not key:
             raise RuntimeError(
@@ -53,7 +61,7 @@ class PodManager:
         volume_in_gb: int = 50,
         volume_mount_path: str = "/workspace",
         ports: str = "22/tcp",
-        env: Optional[List[Dict[str, str]]] = None,
+        env: Optional[Dict[str, str]] = None,
         support_public_ip: bool = True,
         cloud_type: str = "ALL",
         min_vcpu_count: int = 4,
@@ -73,8 +81,7 @@ class PodManager:
             volume_mount_path: Where the volume is mounted in the container.
             ports: Exposed ports; SSH on 22/tcp is required for the
                 orchestrator to connect.
-            env: List of ``{"key": ..., "value": ...}`` env vars injected into
-                the pod (used for WANDB_* and run config).
+            env: ``{"KEY": "value", ...}`` env vars injected into the pod.
             support_public_ip: Required to reach SSH from outside RunPod.
             cloud_type: ``"ALL"`` searches all clouds for availability.
             min_vcpu_count: Minimum vCPUs.
@@ -163,6 +170,16 @@ class PodManager:
                 return host, int(_attr(entry[0], "hostPort", entry[0]))
             if entry is not None:
                 return host, int(entry)
+        if isinstance(ports, list):
+            for entry in ports:
+                private_port = _attr(entry, "privatePort")
+                port_type = str(_attr(entry, "type", "")).lower()
+                is_public = _attr(entry, "isIpPublic", True)
+                if str(private_port) == "22" and port_type in ("", "tcp") and is_public:
+                    entry_host = _attr(entry, "ip") or host
+                    public_port = _attr(entry, "publicPort")
+                    if entry_host and public_port:
+                        return str(entry_host), int(public_port)
 
         return host, None
 

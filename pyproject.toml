@@ -5,7 +5,7 @@ description = "ESOL Molecular Solubility Prediction with multiple model architec
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "torch>=2.0",
+    "torch>=2.0,<2.7",
     "torch-geometric>=2.4",
     "rdkit>=2023.9.1",
     "transformers>=4.35",

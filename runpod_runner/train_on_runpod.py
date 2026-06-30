@@ -35,10 +35,11 @@ Example:
 
 import argparse
 import os
+import shlex
 import sys
 import time
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from runpod_runner.pod_manager import DEFAULT_GPU_TYPE, DEFAULT_IMAGE, PodManager
 from Train.wandb_utils import load_dotenv
@@ -133,20 +134,26 @@ def _run_command(ssh: "paramiko.SSHClient", command: str) -> int:
     chan.exec_command(command)
     while not chan.exit_status_ready():
         if chan.recv_ready():
-            sys.stdout.write(chan.recv(4096).decode(errors="replace"))
-            sys.stdout.flush()
+            _write_console(sys.stdout, chan.recv(4096).decode(errors="replace"))
         if chan.recv_stderr_ready():
-            sys.stderr.write(chan.recv_stderr(4096).decode(errors="replace"))
-            sys.stderr.flush()
+            _write_console(sys.stderr, chan.recv_stderr(4096).decode(errors="replace"))
         time.sleep(0.1)
     # Drain any remaining buffered output.
     while chan.recv_ready():
-        sys.stdout.write(chan.recv(4096).decode(errors="replace"))
-        sys.stdout.flush()
+        _write_console(sys.stdout, chan.recv(4096).decode(errors="replace"))
     while chan.recv_stderr_ready():
-        sys.stderr.write(chan.recv_stderr(4096).decode(errors="replace"))
-        sys.stderr.flush()
+        _write_console(sys.stderr, chan.recv_stderr(4096).decode(errors="replace"))
     return chan.recv_exit_status()
+
+
+def _write_console(stream, text: str) -> None:
+    """Write remote output without crashing on the local console encoding."""
+    try:
+        stream.write(text)
+    except UnicodeEncodeError:
+        encoding = getattr(stream, "encoding", None) or "utf-8"
+        stream.write(text.encode(encoding, errors="replace").decode(encoding))
+    stream.flush()
 
 
 def _sftp_makedirs(sftp, remote_dir: str) -> None:
@@ -163,6 +170,9 @@ def _sftp_makedirs(sftp, remote_dir: str) -> None:
 
 def _sftp_upload(sftp, local: str, remote: str) -> None:
     """Upload a local file or directory tree to a remote path."""
+    name = os.path.basename(local)
+    if name == "__pycache__" or name.endswith(".pyc"):
+        return
     if os.path.isfile(local):
         _sftp_makedirs(sftp, os.path.dirname(remote))
         sftp.put(local, remote)
@@ -174,11 +184,15 @@ def _sftp_upload(sftp, local: str, remote: str) -> None:
         _sftp_upload(sftp, os.path.join(local, entry), f"{remote}/{entry}")
 
 
-def _sftp_download_dir(sftp, remote_dir: str, local_dir: Path) -> None:
+def _sftp_download_dir(sftp, remote_dir: str, local_dir: Path) -> bool:
     """Recursively download a remote directory into a local directory."""
+    try:
+        entries = sftp.listdir_attr(remote_dir)
+    except FileNotFoundError:
+        return False
     local_dir.mkdir(parents=True, exist_ok=True)
     from stat import S_ISDIR
-    for entry in sftp.listdir_attr(remote_dir):
+    for entry in entries:
         remote_path = f"{remote_dir}/{entry.filename}"
         local_path = local_dir / entry.filename
         if S_ISDIR(entry.st_mode):
@@ -187,6 +201,7 @@ def _sftp_download_dir(sftp, remote_dir: str, local_dir: Path) -> None:
             local_path.parent.mkdir(parents=True, exist_ok=True)
             sftp.get(remote_path, str(local_path))
             print(f"[scp] downloaded {remote_path} -> {local_path}")
+    return True
 
 
 def _sftp_download_file(sftp, remote_path: str, local_path: Path) -> bool:
@@ -206,22 +221,36 @@ def _sftp_download_file(sftp, remote_path: str, local_path: Path) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _build_pod_env(args: argparse.Namespace, remote_data_path: str) -> List[dict]:
-    """Build the env var list injected into the pod at creation time."""
-    env: List[dict] = [
-        {"key": "REPO_URL", "value": args.repo_url},
-        {"key": "REPO_REF", "value": args.repo_ref},
-        {"key": "MODEL", "value": args.model},
-        {"key": "DATA_PATH", "value": remote_data_path},
-        {"key": "CHECKPOINT_DIR", "value": "/workspace/checkpoints"},
-        {"key": "TRAIN_ARGS", "value": args.training_args or ""},
-    ]
+def _build_pod_env(args: argparse.Namespace, remote_data_path: str) -> Dict[str, str]:
+    """Build env vars injected into the pod at creation time."""
+    env: Dict[str, str] = {
+        "REPO_URL": args.repo_url,
+        "REPO_REF": args.repo_ref,
+        "MODEL": args.model,
+        "DATA_PATH": remote_data_path,
+        "CHECKPOINT_DIR": "/workspace/checkpoints",
+        "TRAIN_ARGS": args.training_args or "",
+    }
     for var in ("WANDB_PROJECT", "WANDB_ENTITY", "WANDB_NAME", "WANDB_GROUP",
                 "WANDB_TAGS", "WANDB_MODE", "WANDB_API_KEY"):
         value = os.environ.get(var)
         if value:
-            env.append({"key": var, "value": value})
+            env[var] = value
     return env
+
+
+def _shell_env_file(env: Dict[str, str]) -> str:
+    """Render env vars as a shell file that can be sourced over SSH."""
+    lines = [
+        "# Generated by runpod_runner.train_on_runpod.py",
+        "set -a",
+    ]
+    for key, value in env.items():
+        if not key.replace("_", "").isalnum() or key[0].isdigit():
+            raise ValueError(f"Invalid env var name: {key!r}")
+        lines.append(f"{key}={shlex.quote(value)}")
+    lines.append("set +a")
+    return "\n".join(lines) + "\n"
 
 
 def _resolve_ssh_key(explicit: Optional[str]) -> Path:
@@ -355,10 +384,28 @@ def main() -> int:
                 # Upload bootstrap script.
                 bootstrap_local = Path(__file__).parent / "bootstrap.sh"
                 _sftp_upload(sftp, str(bootstrap_local), "/workspace/bootstrap.sh")
+                with sftp.open("/workspace/runpod_env.sh", "w") as remote_env:
+                    remote_env.write(_shell_env_file(pod_env))
+                print("[scp] uploaded run config -> /workspace/runpod_env.sh")
 
                 # Upload pre-built train/val/test splits (entire directory).
                 print(f"[scp] uploading splits {splits_dir} -> {remote_data_path}")
                 _sftp_upload(sftp, str(splits_dir), remote_data_path)
+
+                # Overlay local training code when it differs from the remote clone.
+                repo_root = _project_root()
+                for filename in ("pyproject.toml", "uv.lock"):
+                    local = repo_root / filename
+                    if local.is_file():
+                        remote = f"/workspace/code_overlay/{filename}"
+                        print(f"[scp] uploading local {filename} -> {remote}")
+                        _sftp_upload(sftp, str(local), remote)
+                for subdir in ("Train", "DataUtils"):
+                    local = repo_root / subdir
+                    if local.is_dir():
+                        remote = f"/workspace/code_overlay/{subdir}"
+                        print(f"[scp] uploading local {subdir}/ -> {remote}")
+                        _sftp_upload(sftp, str(local), remote)
 
                 # Upload any extra artifacts (e.g. pretrained checkpoints).
                 for local, remote in args.upload:
@@ -368,16 +415,20 @@ def main() -> int:
 
             # Run the bootstrap script; stream output live.
             print("[runpod] starting training on pod...")
-            exit_code = _run_command(ssh, "bash /workspace/bootstrap.sh")
+            exit_code = _run_command(
+                ssh,
+                "bash -lc 'source /workspace/runpod_env.sh && bash /workspace/bootstrap.sh'",
+            )
             print(f"[runpod] bootstrap exited with code {exit_code}")
 
             # Fetch checkpoint(s) + log regardless of exit code (best effort).
             download_dir = Path(args.download_dir) / pod_id
             sftp = ssh.open_sftp()
             try:
-                _sftp_download_dir(
+                if not _sftp_download_dir(
                     sftp, "/workspace/checkpoints", download_dir / "checkpoints"
-                )
+                ):
+                    print("[scp] no /workspace/checkpoints directory to download")
                 _sftp_download_file(
                     sftp, "/workspace/train.log", download_dir / "train.log"
                 )

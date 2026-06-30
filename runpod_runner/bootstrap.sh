@@ -43,6 +43,22 @@ git fetch --quiet origin
 git checkout "$REPO_REF"
 git reset --hard "origin/${REPO_REF}"
 
+# Optional: overlay Train/ and DataUtils/ uploaded from the local machine (useful
+# when local changes are not yet pushed to the remote).
+if [ -d /workspace/code_overlay/Train ]; then
+    echo "Overlaying local Train/ and DataUtils/ onto cloned repo"
+    cp -r /workspace/code_overlay/Train/. "$REPO_DIR/Train/"
+    if [ -d /workspace/code_overlay/DataUtils ]; then
+        cp -r /workspace/code_overlay/DataUtils/. "$REPO_DIR/DataUtils/"
+    fi
+fi
+for metadata_file in pyproject.toml uv.lock; do
+    if [ -f "/workspace/code_overlay/${metadata_file}" ]; then
+        echo "Overlaying local ${metadata_file} onto cloned repo"
+        cp "/workspace/code_overlay/${metadata_file}" "$REPO_DIR/${metadata_file}"
+    fi
+done
+
 # Install uv and sync the project environment from the lockfile.
 echo "Installing uv..."
 pip install --quiet uv

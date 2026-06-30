@@ -35,7 +35,7 @@ def create_dataloaders(
     test_smiles: List[str],
     test_targets: np.ndarray,
     batch_size: int = 32,
-    use_dmpnn_format: bool = True,
+    use_dmpnn_format: bool = False,
 ) -> Tuple[PyGDataLoader, PyGDataLoader, PyGDataLoader]:
     """Create PyTorch Geometric DataLoaders.
 
@@ -182,7 +182,7 @@ def train_gnn(
     # Optimizer and criterion
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=5, verbose=True
+        optimizer, mode='min', factor=0.5, patience=5
     )
     criterion = nn.MSELoss()
 
