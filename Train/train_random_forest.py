@@ -18,6 +18,7 @@ from Train.validate_random_forest import (
     validate_random_forest,
     validate_random_forest_with_uncertainty,
 )
+from Train.wandb_utils import init_run, finish_run
 
 
 def train_random_forest(
@@ -182,17 +183,31 @@ def main():
                         help="Path to save trained model")
     parser.add_argument("--wandb-project", type=str, default="mol-solubility")
     parser.add_argument("--wandb-name", type=str, default=None)
+    parser.add_argument("--wandb-entity", type=str, default=None,
+                        help="wandb entity/team (default: WANDB_ENTITY env)")
+    parser.add_argument("--wandb-group", type=str, default=None,
+                        help="wandb group name (e.g. to group runpod runs)")
+    parser.add_argument("--wandb-tags", type=str, default=None,
+                        help="Comma/space separated wandb tags")
+    parser.add_argument("--wandb-mode", type=str, default=None,
+                        choices=["online", "offline", "disabled"],
+                        help="Force wandb mode (default: online if WANDB_API_KEY "
+                             "set, else offline)")
     parser.add_argument("--no-wandb", action="store_true")
 
     args = parser.parse_args()
 
     # Initialize wandb
     if not args.no_wandb:
-        wandb.init(
+        init_run(
             project=args.wandb_project,
             name=args.wandb_name,
             config=vars(args),
             job_type="train",
+            tags=args.wandb_tags,
+            group=args.wandb_group,
+            entity=args.wandb_entity,
+            mode=args.wandb_mode,
         )
 
     # Load data
@@ -261,7 +276,7 @@ def main():
             wandb.save(str(save_path))
 
     if not args.no_wandb:
-        wandb.finish()
+        finish_run()
 
 
 if __name__ == "__main__":

@@ -40,7 +40,16 @@ molecule-solubility-prediction/
 │   ├── train_random_forest.py       # Train Random Forest
 │   ├── validate_transformer.py      # Validation loop for transformers
 │   ├── validate_gnn.py              # Validation loop for D-MPNN
-│   └── validate_random_forest.py    # Validation loop for Random Forest
+│   ├── validate_random_forest.py    # Validation loop for Random Forest
+│   ├── calibrate_conformal.py       # Fit conformal prediction intervals
+│   └── wandb_utils.py               # Shared wandb init/finish helpers
+├── UQ/
+│   ├── conformal.py                 # Split conformal regressor
+│   └── evaluate.py                  # Conformal interval metric helpers
+├── runpod_runner/
+│   ├── pod_manager.py               # RunPod pod lifecycle (runpod SDK)
+│   ├── train_on_runpod.py           # Orchestrator: train one model on a pod
+│   └── bootstrap.sh                 # In-pod setup + training script
 ├── Inference/
 │   ├── inference_random_forest.py
 │   ├── inference_gnn.py
@@ -121,6 +130,56 @@ python -m Train.finetune_chemberta \
 ```
 
 All training scripts log to [Weights & Biases](https://wandb.ai): loss curves, RMSE, MAE, and uncertainty calibration metrics.
+
+### Logging
+
+All training entry points initialize wandb through a shared helper (`Train/wandb_utils.py`), which is environment-aware and safe for headless/RunPod runs:
+
+- `WANDB_API_KEY` — when unset and no mode is forced, the run starts in **offline** mode so training never blocks on an interactive login prompt. Set `WANDB_MODE=online` (or provide the key) to stream remotely.
+- `WANDB_ENTITY`, `WANDB_PROJECT`, `WANDB_DIR`, `WANDB_MODE` — optional env overrides; per-run `--wandb-entity`, `--wandb-group`, `--wandb-tags`, `--wandb-mode` CLI flags are available on every training script.
+
+```bash
+export WANDB_API_KEY=...        # remote logging
+export WANDB_ENTITY=my-team      # optional
+uv run python -m Train.train_gnn --data-path data/aqsoldb.csv --wandb-group runpod
+```
+
+**`.env` file (gitignored).** Put your keys in `.env` at the repo root (see `.env.example` for the template). Both the local training scripts and the RunPod orchestrator auto-load it — real shell exports still take precedence. `.env` is in `.gitignore` so secrets are never committed.
+
+```dotenv
+RUNPOD_API_KEY=...
+WANDB_API_KEY=...
+WANDB_ENTITY=...        # optional
+WANDB_PROJECT=mol-solubility
+```
+
+## Training on RunPod
+
+`runpod_runner/train_on_runpod.py` deploys a single transient GPU pod, uploads your data (+ optional extra artifacts), runs the selected training module over SSH, streams the log to your console, then SCPs the checkpoint and `train.log` back and terminates the pod. Teardown is wrapped in `try/finally` so the pod is always released. Random Forest is excluded (it runs locally on CPU per the project plan).
+
+Prerequisites (one-time):
+
+1. Install the RunPod extra: `uv sync --extra runpod`.
+2. Set `RUNPOD_API_KEY` (RunPod → Settings → API Keys).
+3. Set `WANDB_API_KEY` (and optionally `WANDB_ENTITY`/`WANDB_PROJECT`) — these are injected into the pod so it logs remotely.
+4. Add your SSH **public** key under RunPod → Settings → SSH Keys (RunPod injects it into the pod). The matching private key is auto-detected (`~/.ssh/id_ed25519` / `id_rsa` / `id_ecdsa`) or passed via `--ssh-private-key`.
+
+```bash
+# Train D-MPNN on an A6000, streaming metrics to wandb
+uv run --extra runpod python -m runpod_runner.train_on_runpod \
+    --model dmpnn \
+    --data-path data/aqsoldb.csv \
+    --training-args "--n-epochs 50 --batch-size 64"
+
+# Fine-tune the scratch transformer (upload its pretrained checkpoint too)
+uv run --extra runpod python -m runpod_runner.train_on_runpod \
+    --model transformer \
+    --data-path data/aqsoldb.csv \
+    --upload checkpoints/pretrained_model.pt:/workspace/uploads/pretrained.pt \
+    --training-args "--pretrained-path /workspace/uploads/pretrained.pt"
+```
+
+The checkpoint and `train.log` are downloaded to `./runpod_downloads/<pod_id>/`. Use `--keep-pod` to leave the pod running for debugging, and `--gpu-type` / `--image` / `--volume` to customize the pod. The pod clones the repo from `--repo-url` (default: this project's GitHub origin) on a persistent `/workspace` volume.
 
 ## Inference
 
