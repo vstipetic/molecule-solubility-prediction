@@ -18,6 +18,7 @@ from DataUtils.utils import (
     get_atom_feature_dim,
     get_bond_feature_dim,
     load_data,
+    load_splits,
     load_zinc_data,
 )
 from DataUtils.datasets import (
@@ -55,6 +56,7 @@ __all__ = [
     "get_atom_feature_dim",
     "get_bond_feature_dim",
     "load_data",
+    "load_splits",
     "load_zinc_data",
     # datasets
     "AqSolDBDataset",

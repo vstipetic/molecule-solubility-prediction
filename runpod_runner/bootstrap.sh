@@ -8,7 +8,7 @@
 #   REPO_REF        - branch/tag/commit to checkout (default: main)
 #   MODEL           - one of: dmpnn | transformer | chemberta
 #   TRAIN_ARGS      - extra args forwarded to the training module
-#   DATA_PATH       - path inside pod to the training CSV
+#   DATA_PATH       - path inside pod to splits dir (train.csv, val.csv, test.csv)
 #   CHECKPOINT_DIR  - where the training script writes the checkpoint
 #   WANDB_PROJECT / WANDB_ENTITY / WANDB_NAME / WANDB_GROUP / WANDB_TAGS / WANDB_MODE
 #
@@ -59,7 +59,7 @@ WANDB_FLAGS=""
 [ -n "${WANDB_MODE:-}" ]     && WANDB_FLAGS="$WANDB_FLAGS --wandb-mode ${WANDB_MODE}"
 
 # Per-model training command. The save path lives under $CHECKPOINT_DIR so the
-# orchestrator can SCP it back; DATA_PATH is the uploaded CSV.
+# orchestrator can SCP it back; DATA_PATH is the uploaded splits directory.
 case "$MODEL" in
     dmpnn)
         SAVE_PATH="$CHECKPOINT_DIR/dmpnn.pt"

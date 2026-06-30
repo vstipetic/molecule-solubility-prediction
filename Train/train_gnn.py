@@ -17,7 +17,7 @@ from torch_geometric.loader import DataLoader as PyGDataLoader
 import wandb
 
 from DataUtils.graph_preprocessing import MoleculeGraphDataset
-from DataUtils.utils import scaffold_split, load_data
+from DataUtils.utils import load_splits
 from Models.dmpnn import DMPNN, create_dmpnn_ensemble
 from Train.validate_gnn import (
     validate_gnn,
@@ -277,7 +277,7 @@ def train_ensemble(
 def main():
     parser = argparse.ArgumentParser(description="Train D-MPNN model")
     parser.add_argument("--data-path", type=str, required=True,
-                        help="Path to training data CSV")
+                        help="Directory with train.csv, val.csv, and test.csv")
     parser.add_argument("--smiles-column", type=str, default="SMILES")
     parser.add_argument("--target-column", type=str, default="Solubility")
     parser.add_argument("--hidden-size", type=int, default=300)
@@ -290,8 +290,6 @@ def main():
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--n-epochs", type=int, default=100)
     parser.add_argument("--patience", type=int, default=10)
-    parser.add_argument("--train-ratio", type=float, default=0.8)
-    parser.add_argument("--val-ratio", type=float, default=0.1)
     parser.add_argument("--ensemble", action="store_true", help="Train ensemble")
     parser.add_argument("--n-models", type=int, default=5, help="Ensemble size")
     parser.add_argument("--mc-samples", type=int, default=100,
@@ -330,19 +328,10 @@ def main():
             mode=args.wandb_mode,
         )
 
-    # Load data
-    print(f"Loading data from {args.data_path}...")
-    smiles_list, targets = load_data(
-        args.data_path,
-        args.smiles_column,
-        args.target_column,
-    )
-    print(f"Loaded {len(smiles_list)} molecules")
-
-    # Scaffold split
-    print("Performing scaffold split...")
+    # Load pre-built splits
+    print(f"Loading splits from {args.data_path}...")
     (train_smiles, train_targets), (val_smiles, val_targets), (test_smiles, test_targets) = \
-        scaffold_split(smiles_list, targets, args.train_ratio, args.val_ratio)
+        load_splits(args.data_path)
 
     print(f"Train: {len(train_smiles)}, Val: {len(val_smiles)}, Test: {len(test_smiles)}")
 

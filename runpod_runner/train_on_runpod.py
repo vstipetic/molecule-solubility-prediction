@@ -21,16 +21,14 @@ Required SSH setup (one-time):
     matching private key with --ssh-private-key (default ~/.ssh/id_ed25519).
 
 Example:
-    # Train the D-MPNN on an A6000, streaming to wandb project mol-solubility
+    # Train ChemBERTa (uploads Storage/Datasets/splits/ by default)
     uv run --extra runpod python -m runpod_runner.train_on_runpod \\
-        --model dmpnn \\
-        --data-path data/aqsoldb.csv \\
-        --training-args "--n-epochs 50 --batch-size 64"
+        --model chemberta \\
+        --training-args "--freeze-encoder --n-epochs 50"
 
     # Fine-tune the scratch transformer (upload its pretrained checkpoint too)
     uv run --extra runpod python -m runpod_runner.train_on_runpod \\
         --model transformer \\
-        --data-path data/aqsoldb.csv \\
         --upload checkpoints/pretrained_model.pt:/workspace/uploads/pretrained.pt \\
         --training-args "--pretrained-path /workspace/uploads/pretrained.pt"
 """
@@ -54,6 +52,35 @@ except ImportError:  # pragma: no cover - optional dependency
 SUPPORTED_MODELS = ("dmpnn", "transformer", "chemberta")
 DEFAULT_REPO_URL = "https://github.com/vstipetic/molecule-solubility-prediction.git"
 DEFAULT_DOWNLOAD_DIR = "./runpod_downloads"
+DEFAULT_SPLITS_DIR = "Storage/Datasets/splits"
+REMOTE_SPLITS_DIR = "/workspace/data/splits"
+
+
+def _project_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def _default_splits_dir() -> Path:
+    return _project_root() / DEFAULT_SPLITS_DIR
+
+
+def _validate_splits_dir(path: Path) -> None:
+    """Ensure a directory contains the required train/val/test CSV files."""
+    if not path.is_dir():
+        raise FileNotFoundError(
+            f"Expected a splits directory at {path} "
+            f"(containing train.csv, val.csv, test.csv)."
+        )
+    missing = [
+        name for name in ("train.csv", "val.csv", "test.csv")
+        if not (path / name).is_file()
+    ]
+    if missing:
+        raise FileNotFoundError(
+            f"Missing {', '.join(missing)} in {path}. "
+            f"Run: python -m DataUtils.prepare_data --input <dataset.csv> "
+            f"--output-dir {path}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +227,9 @@ def _build_pod_env(args: argparse.Namespace, remote_data_path: str) -> List[dict
 def _resolve_ssh_key(explicit: Optional[str]) -> Path:
     if explicit:
         return Path(explicit).expanduser()
+    env_path = os.environ.get("RUNPOD_SSH_PRIVATE_KEY")
+    if env_path:
+        return Path(env_path).expanduser()
     home = Path.home()
     for candidate in (".ssh/id_ed25519", ".ssh/id_rsa", ".ssh/id_ecdsa"):
         path = home / candidate
@@ -207,7 +237,7 @@ def _resolve_ssh_key(explicit: Optional[str]) -> Path:
             return path
     raise RuntimeError(
         "No SSH private key found. Add your public key to RunPod -> Settings -> "
-        "SSH Keys and pass --ssh-private-key pointing at the matching private key."
+        "SSH Keys, set RUNPOD_SSH_PRIVATE_KEY in .env, or pass --ssh-private-key."
     )
 
 
@@ -228,8 +258,9 @@ def main() -> int:
     )
     parser.add_argument("--model", required=True, choices=SUPPORTED_MODELS,
                         help="Which model to train (RF runs locally, not here)")
-    parser.add_argument("--data-path", required=True,
-                        help="Local training CSV (uploaded to the pod)")
+    parser.add_argument("--data-path", default=None,
+                        help=f"Local splits directory with train/val/test CSVs "
+                             f"(default: {DEFAULT_SPLITS_DIR})")
     parser.add_argument("--training-args", default="",
                         help='Extra args forwarded to the training module, e.g. '
                              '"--n-epochs 50 --batch-size 64"')
@@ -265,9 +296,14 @@ def main() -> int:
         print("ERROR: RUNPOD_API_KEY env var is required.", file=sys.stderr)
         return 2
 
-    if not os.path.exists(args.data_path):
-        print(f"ERROR: data path does not exist: {args.data_path}", file=sys.stderr)
+    splits_dir = Path(args.data_path) if args.data_path else _default_splits_dir()
+    try:
+        _validate_splits_dir(splits_dir)
+    except FileNotFoundError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
         return 2
+
+    remote_data_path = REMOTE_SPLITS_DIR
 
     if paramiko is None:
         print(
@@ -289,8 +325,6 @@ def main() -> int:
     if args.no_wandb:
         os.environ["WANDB_MODE"] = "disabled"
 
-    data_basename = os.path.basename(os.path.abspath(args.data_path))
-    remote_data_path = f"/workspace/data/{data_basename}"
     pod_env = _build_pod_env(args, remote_data_path)
     pod_name = args.pod_name or f"mol-sol-{args.model}"
 
@@ -322,8 +356,9 @@ def main() -> int:
                 bootstrap_local = Path(__file__).parent / "bootstrap.sh"
                 _sftp_upload(sftp, str(bootstrap_local), "/workspace/bootstrap.sh")
 
-                # Upload training data.
-                _sftp_upload(sftp, args.data_path, remote_data_path)
+                # Upload pre-built train/val/test splits (entire directory).
+                print(f"[scp] uploading splits {splits_dir} -> {remote_data_path}")
+                _sftp_upload(sftp, str(splits_dir), remote_data_path)
 
                 # Upload any extra artifacts (e.g. pretrained checkpoints).
                 for local, remote in args.upload:

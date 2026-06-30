@@ -15,7 +15,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 import wandb
 
-from DataUtils.utils import scaffold_split, load_data
+from DataUtils.utils import load_splits
 from DataUtils.datasets import TransformerSolubilityDataset
 from DataUtils.collate import transformer_collate_fn
 from Models.chemberta import ChemBERTaForSolubility
@@ -229,7 +229,7 @@ def finetune_chemberta(
 def main():
     parser = argparse.ArgumentParser(description="Fine-tune ChemBERTa for solubility")
     parser.add_argument("--data-path", type=str, required=True,
-                        help="Path to training data CSV")
+                        help="Directory with train.csv, val.csv, and test.csv")
     parser.add_argument("--smiles-column", type=str, default="SMILES")
     parser.add_argument("--target-column", type=str, default="Solubility")
     parser.add_argument("--learning-rate", type=float, default=1e-5)
@@ -238,8 +238,6 @@ def main():
     parser.add_argument("--n-epochs", type=int, default=50)
     parser.add_argument("--patience", type=int, default=10)
     parser.add_argument("--max-length", type=int, default=512)
-    parser.add_argument("--train-ratio", type=float, default=0.8)
-    parser.add_argument("--val-ratio", type=float, default=0.1)
     parser.add_argument("--freeze-encoder", action="store_true",
                         help="Freeze encoder layers")
     parser.add_argument("--freeze-layers", type=int, default=None,
@@ -281,19 +279,10 @@ def main():
             mode=args.wandb_mode,
         )
 
-    # Load data
-    print(f"Loading data from {args.data_path}...")
-    smiles_list, targets = load_data(
-        args.data_path,
-        args.smiles_column,
-        args.target_column,
-    )
-    print(f"Loaded {len(smiles_list)} molecules")
-
-    # Scaffold split
-    print("Performing scaffold split...")
+    # Load pre-built splits
+    print(f"Loading splits from {args.data_path}...")
     (train_smiles, train_targets), (val_smiles, val_targets), (test_smiles, test_targets) = \
-        scaffold_split(smiles_list, targets, args.train_ratio, args.val_ratio)
+        load_splits(args.data_path, args.smiles_column, args.target_column)
 
     print(f"Train: {len(train_smiles)}, Val: {len(val_smiles)}, Test: {len(test_smiles)}")
 

@@ -315,6 +315,55 @@ def get_bond_feature_dim() -> int:
     return len(BOND_TYPES) + 1 + 1 + 1
 
 
+def load_splits(
+    splits_dir: str,
+    smiles_column: str = "SMILES",
+    target_column: str = "Solubility",
+) -> Tuple[
+    Tuple[List[str], np.ndarray],
+    Tuple[List[str], np.ndarray],
+    Tuple[List[str], np.ndarray],
+]:
+    """Load pre-built train/val/test CSV splits from a directory.
+
+    Expects ``train.csv``, ``val.csv``, and ``test.csv`` in ``splits_dir``.
+    Use :func:`DataUtils.prepare_data` to generate these files once so every
+    training run uses identical splits.
+
+    Args:
+        splits_dir: Directory containing split CSV files.
+        smiles_column: SMILES column name in each CSV.
+        target_column: Target column name in each CSV.
+
+    Returns:
+        Three ``(smiles_list, targets)`` tuples for train, val, and test.
+
+    Raises:
+        FileNotFoundError: If the directory or a required split file is missing.
+    """
+    from pathlib import Path
+
+    root = Path(splits_dir)
+    if not root.is_dir():
+        raise FileNotFoundError(
+            f"Expected a splits directory at {splits_dir!r} "
+            f"(containing train.csv, val.csv, test.csv)."
+        )
+
+    splits = {}
+    for name in ("train", "val", "test"):
+        path = root / f"{name}.csv"
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"Missing {name}.csv in {root}. "
+                f"Run: python -m DataUtils.prepare_data --input <dataset.csv> "
+                f"--output-dir {root}"
+            )
+        splits[name] = load_data(str(path), smiles_column, target_column)
+
+    return splits["train"], splits["val"], splits["test"]
+
+
 def load_data(
     data_path: str,
     smiles_column: str = "SMILES",
