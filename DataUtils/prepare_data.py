@@ -52,13 +52,15 @@ def prepare_splits(
     target_column: str = "Solubility",
     train_ratio: float = 0.8,
     val_ratio: float = 0.1,
+    calib_ratio: float = 0.0,
     random_state: int = 42,
     standardize_columns: bool = True,
 ) -> None:
-    """Prepare train/val/test CSV files from input dataset.
+    """Prepare train/val/(calib)/test CSV files from input dataset.
 
     Creates reproducible splits using scaffold-based splitting to prevent
-    data leakage between sets.
+    data leakage between sets. When ``calib_ratio`` is greater than zero, an
+    additional ``calib.csv`` is written for conformal calibration.
 
     Args:
         input_path: Path to input CSV file.
@@ -67,6 +69,8 @@ def prepare_splits(
         target_column: Name of target column in input.
         train_ratio: Fraction for training set.
         val_ratio: Fraction for validation set.
+        calib_ratio: Fraction for the conformal calibration set. If 0.0
+            (default), no calib.csv is written.
         random_state: Random seed for reproducibility.
         standardize_columns: If True, output columns are renamed to
                            'SMILES' and 'Solubility'.
@@ -84,11 +88,26 @@ def prepare_splits(
     targets = df[target_column].values.astype(np.float32)
 
     # Scaffold split
-    print(f"Performing scaffold split (train={train_ratio}, val={val_ratio})...")
-    (train_smiles, train_targets), (val_smiles, val_targets), (test_smiles, test_targets) = \
-        scaffold_split(smiles_list, targets, train_ratio, val_ratio, random_state)
+    print(
+        f"Performing scaffold split "
+        f"(train={train_ratio}, val={val_ratio}, calib={calib_ratio})..."
+    )
+    splits = scaffold_split(
+        smiles_list, targets, train_ratio, val_ratio, calib_ratio, random_state
+    )
 
-    print(f"Split sizes: Train={len(train_smiles)}, Val={len(val_smiles)}, Test={len(test_smiles)}")
+    if calib_ratio > 0.0:
+        split_names = ["train", "val", "calib", "test"]
+    else:
+        split_names = ["train", "val", "test"]
+
+    named_splits = list(zip(split_names, splits))
+
+    size_summary = ", ".join(
+        f"{name.capitalize()}={len(split_smiles)}"
+        for name, (split_smiles, _) in named_splits
+    )
+    print(f"Split sizes: {size_summary}")
 
     # Determine output column names
     out_smiles_col = "SMILES" if standardize_columns else smiles_column
@@ -99,11 +118,7 @@ def prepare_splits(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Save splits
-    for split_name, split_smiles, split_targets in [
-        ("train", train_smiles, train_targets),
-        ("val", val_smiles, val_targets),
-        ("test", test_smiles, test_targets),
-    ]:
+    for split_name, (split_smiles, split_targets) in named_splits:
         split_df = pd.DataFrame({
             out_smiles_col: split_smiles,
             out_target_col: split_targets,
@@ -117,15 +132,15 @@ def prepare_splits(
         'input_file': str(input_path),
         'train_ratio': train_ratio,
         'val_ratio': val_ratio,
-        'test_ratio': 1 - train_ratio - val_ratio,
+        'calib_ratio': calib_ratio,
+        'test_ratio': 1 - train_ratio - val_ratio - calib_ratio,
         'random_state': random_state,
-        'train_size': len(train_smiles),
-        'val_size': len(val_smiles),
-        'test_size': len(test_smiles),
         'total_valid': len(smiles_list),
         'smiles_column': out_smiles_col,
         'target_column': out_target_col,
     }
+    for split_name, (split_smiles, _) in named_splits:
+        metadata[f'{split_name}_size'] = len(split_smiles)
 
     metadata_path = output_dir / "split_metadata.txt"
     with open(metadata_path, 'w') as f:
@@ -176,6 +191,12 @@ def main() -> None:
         help="Fraction for validation set (default: 0.1)"
     )
     parser.add_argument(
+        "--calib-ratio",
+        type=float,
+        default=0.0,
+        help="Fraction for conformal calibration set (default: 0.0, no calib split)"
+    )
+    parser.add_argument(
         "--random-state",
         type=int,
         default=42,
@@ -190,8 +211,8 @@ def main() -> None:
     args = parser.parse_args()
 
     # Validate ratios
-    if args.train_ratio + args.val_ratio >= 1.0:
-        parser.error("train_ratio + val_ratio must be less than 1.0")
+    if args.train_ratio + args.val_ratio + args.calib_ratio >= 1.0:
+        parser.error("train_ratio + val_ratio + calib_ratio must be less than 1.0")
 
     prepare_splits(
         input_path=args.input,
@@ -200,6 +221,7 @@ def main() -> None:
         target_column=args.target_column,
         train_ratio=args.train_ratio,
         val_ratio=args.val_ratio,
+        calib_ratio=args.calib_ratio,
         random_state=args.random_state,
         standardize_columns=not args.no_standardize,
     )
@@ -207,6 +229,8 @@ def main() -> None:
     print("\nDone! You can now use the split files for training:")
     print(f"  Train: {args.output_dir}/train.csv")
     print(f"  Val:   {args.output_dir}/val.csv")
+    if args.calib_ratio > 0.0:
+        print(f"  Calib: {args.output_dir}/calib.csv")
     print(f"  Test:  {args.output_dir}/test.csv")
 
 

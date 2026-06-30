@@ -30,6 +30,11 @@ molecule-solubility-prediction/
 │   ├── validate_transformer.py      # Validation for transformers
 │   ├── validate_gnn.py              # Validation for GNN
 │   └── validate_random_forest.py    # Validation for Random Forest
+├── Inference/
+│   ├── inference_random_forest.py   # Inference for Random Forest
+│   ├── inference_gnn.py             # Inference for D-MPNN
+│   ├── inference_transformer.py     # Inference for scratch transformer
+│   └── inference_chemberta.py       # Inference for ChemBERTa
 └── pyproject.toml                   # Dependencies (uv)
 ```
 
@@ -112,3 +117,48 @@ All training and validation scripts use wandb for logging:
 - RMSE/MAE metrics
 - Uncertainty calibration
 - Model checkpoints
+
+## Inference
+All inference scripts accept input CSV files and output predictions in standard format:
+- Input: CSV with SMILES column
+- Output: CSV with SMILES, Solubility, and optionally Uncertainty columns
+
+### Output Format
+| Column | Description |
+|--------|-------------|
+| SMILES | Input molecular structure |
+| Solubility | Predicted solubility (log mol/L) |
+| Uncertainty | Standard deviation of predictions (same units as Solubility) |
+
+### Uncertainty Estimation Methods
+The Uncertainty column contains the **standard deviation** of predictions, computed differently per model:
+
+| Model | Method | Description |
+|-------|--------|-------------|
+| Random Forest | Tree variance | Std of predictions across individual trees in the forest |
+| D-MPNN (GNN) | MC Dropout | Std of predictions across N stochastic forward passes |
+| Transformer | MC Dropout | Std of predictions across N stochastic forward passes |
+| ChemBERTa | MC Dropout | Std of predictions across N stochastic forward passes |
+
+**Interpretation**: Higher uncertainty values indicate less confident predictions. For approximately 68% of predictions, the true value should fall within ±1 std of the prediction (assuming Gaussian errors).
+
+### Usage Examples
+```bash
+# Random Forest
+python -m Inference.inference_random_forest --model-path model.pkl --input-path test.csv --output-path predictions.csv
+
+# D-MPNN (GNN)
+python -m Inference.inference_gnn --model-path model.pt --input-path test.csv --output-path predictions.csv
+
+# Transformer (scratch)
+python -m Inference.inference_transformer --model-path model.pt --input-path test.csv --output-path predictions.csv
+
+# ChemBERTa
+python -m Inference.inference_chemberta --model-path model.pt --input-path test.csv --output-path predictions.csv
+```
+
+### Common Options
+- `--no-uncertainty`: Disable uncertainty estimation (faster inference)
+- `--n-mc-samples N`: Number of MC dropout samples (default: 100)
+- `--batch-size N`: Batch size for inference (default: 32)
+- `--device cuda/cpu`: Device for inference

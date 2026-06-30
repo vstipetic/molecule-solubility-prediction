@@ -97,3 +97,51 @@ def compute_calibration_metrics(
     calibration['nll'] = float(nll)
 
     return calibration
+
+
+def compute_conformal_metrics(
+    lower: np.ndarray,
+    upper: np.ndarray,
+    targets: np.ndarray,
+    filter_nan: bool = True,
+) -> Dict[str, float]:
+    """Compute metrics for conformal prediction intervals.
+
+    Evaluates the empirical coverage (fraction of targets that fall inside
+    the predicted intervals) and the interval widths. For a conformal
+    predictor calibrated at confidence ``1 - alpha``, the empirical coverage
+    should be close to ``1 - alpha``.
+
+    Args:
+        lower: Lower bounds of prediction intervals.
+        upper: Upper bounds of prediction intervals.
+        targets: Ground truth values.
+        filter_nan: Whether to filter out intervals with NaN bounds.
+
+    Returns:
+        Dictionary with conformal metrics:
+        - coverage: Fraction of targets within [lower, upper]
+        - mean_interval_width: Mean of (upper - lower)
+        - median_interval_width: Median of (upper - lower)
+    """
+    if filter_nan:
+        valid_mask = ~(np.isnan(lower) | np.isnan(upper))
+        low = lower[valid_mask]
+        up = upper[valid_mask]
+        targs = targets[valid_mask]
+    else:
+        low = lower
+        up = upper
+        targs = targets
+
+    if len(low) == 0:
+        return {}
+
+    within = (targs >= low) & (targs <= up)
+    widths = up - low
+
+    return {
+        'coverage': float(within.mean()),
+        'mean_interval_width': float(widths.mean()),
+        'median_interval_width': float(np.median(widths)),
+    }

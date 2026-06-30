@@ -38,6 +38,7 @@ from DataUtils.graph_preprocessing import (
 from DataUtils.metrics import (
     compute_metrics,
     compute_calibration_metrics,
+    compute_conformal_metrics,
 )
 from DataUtils.collate import (
     transformer_collate_fn,
@@ -71,6 +72,7 @@ __all__ = [
     # metrics
     "compute_metrics",
     "compute_calibration_metrics",
+    "compute_conformal_metrics",
     # collate
     "transformer_collate_fn",
 ]

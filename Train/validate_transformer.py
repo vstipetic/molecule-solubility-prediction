@@ -17,6 +17,8 @@ from Models.chemberta import ChemBERTaForSolubility
 from DataUtils.metrics import compute_metrics, compute_calibration_metrics
 from DataUtils.datasets import TransformerSolubilityDataset
 from DataUtils.collate import transformer_collate_fn
+from UQ.conformal import ConformalRegressor
+from UQ.evaluate import evaluate_conformal_intervals
 
 
 def validate_transformer(
@@ -75,6 +77,8 @@ def validate_transformer_with_uncertainty(
     n_samples: int = 100,
     log_to_wandb: bool = True,
     prefix: str = "val",
+    conformal: Optional[ConformalRegressor] = None,
+    conformal_alpha: float = 0.1,
 ) -> Dict[str, float]:
     """Validate MoleculeTransformer with MC dropout uncertainty.
 
@@ -85,6 +89,12 @@ def validate_transformer_with_uncertainty(
         n_samples: Number of forward passes for MC dropout.
         log_to_wandb: Whether to log metrics to wandb.
         prefix: Prefix for metric names.
+        conformal: Optional calibrated conformal regressor. When provided,
+            empirical interval coverage and width are reported at
+            ``conformal_alpha``. The MC dropout std is used as the per-sample
+            uncertainty for the normalized score.
+        conformal_alpha: Miscoverage level for conformal interval evaluation
+            (e.g. 0.1 for 90% intervals).
 
     Returns:
         Dictionary of metrics including calibration.
@@ -130,6 +140,12 @@ def validate_transformer_with_uncertainty(
     metrics = compute_metrics(predictions, targets)
     calibration = compute_calibration_metrics(predictions, uncertainties, targets)
     metrics.update(calibration)
+
+    if conformal is not None:
+        conformal_metrics = evaluate_conformal_intervals(
+            conformal, predictions, targets, uncertainties, alpha=conformal_alpha
+        )
+        metrics.update(conformal_metrics)
 
     metrics = {f"{prefix}/{k}": v for k, v in metrics.items()}
 
@@ -204,6 +220,8 @@ def validate_chemberta_with_uncertainty(
     device: torch.device = None,
     log_to_wandb: bool = True,
     prefix: str = "val",
+    conformal: Optional[ConformalRegressor] = None,
+    conformal_alpha: float = 0.1,
 ) -> Dict[str, float]:
     """Validate ChemBERTa with MC dropout uncertainty.
 
@@ -216,6 +234,12 @@ def validate_chemberta_with_uncertainty(
         device: Device to run inference on.
         log_to_wandb: Whether to log metrics to wandb.
         prefix: Prefix for metric names.
+        conformal: Optional calibrated conformal regressor. When provided,
+            empirical interval coverage and width are reported at
+            ``conformal_alpha``. The MC dropout std is used as the per-sample
+            uncertainty for the normalized score.
+        conformal_alpha: Miscoverage level for conformal interval evaluation
+            (e.g. 0.1 for 90% intervals).
 
     Returns:
         Dictionary of metrics including calibration.
@@ -259,6 +283,12 @@ def validate_chemberta_with_uncertainty(
     metrics = compute_metrics(predictions, targets)
     calibration = compute_calibration_metrics(predictions, uncertainties, targets)
     metrics.update(calibration)
+
+    if conformal is not None:
+        conformal_metrics = evaluate_conformal_intervals(
+            conformal, predictions, targets, uncertainties, alpha=conformal_alpha
+        )
+        metrics.update(conformal_metrics)
 
     metrics = {f"{prefix}/{k}": v for k, v in metrics.items()}
 

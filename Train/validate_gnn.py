@@ -17,6 +17,8 @@ from Models.dmpnn import DMPNN, ensemble_predict
 from Models.layers import set_mc_dropout
 from DataUtils.graph_preprocessing import MoleculeGraphDataset
 from DataUtils.metrics import compute_metrics, compute_calibration_metrics
+from UQ.conformal import ConformalRegressor
+from UQ.evaluate import evaluate_conformal_intervals
 
 
 def validate_gnn(
@@ -70,6 +72,8 @@ def validate_gnn_with_uncertainty(
     n_samples: int = 100,
     log_to_wandb: bool = True,
     prefix: str = "val",
+    conformal: Optional[ConformalRegressor] = None,
+    conformal_alpha: float = 0.1,
 ) -> Dict[str, float]:
     """Validate D-MPNN with MC dropout uncertainty estimation.
 
@@ -80,6 +84,12 @@ def validate_gnn_with_uncertainty(
         n_samples: Number of forward passes for MC dropout.
         log_to_wandb: Whether to log metrics to wandb.
         prefix: Prefix for metric names.
+        conformal: Optional calibrated conformal regressor. When provided,
+            empirical interval coverage and width are reported at
+            ``conformal_alpha``. The MC dropout std is used as the per-sample
+            uncertainty for the normalized score.
+        conformal_alpha: Miscoverage level for conformal interval evaluation
+            (e.g. 0.1 for 90% intervals).
 
     Returns:
         Dictionary of metrics including calibration metrics.
@@ -127,6 +137,13 @@ def validate_gnn_with_uncertainty(
     calibration = compute_calibration_metrics(predictions, uncertainties, targets)
     metrics.update(calibration)
 
+    # Conformal interval metrics (optional)
+    if conformal is not None:
+        conformal_metrics = evaluate_conformal_intervals(
+            conformal, predictions, targets, uncertainties, alpha=conformal_alpha
+        )
+        metrics.update(conformal_metrics)
+
     metrics = {f"{prefix}/{k}": v for k, v in metrics.items()}
 
     if log_to_wandb and wandb.run is not None:
@@ -141,6 +158,8 @@ def validate_gnn_ensemble(
     device: torch.device,
     log_to_wandb: bool = True,
     prefix: str = "val",
+    conformal: Optional[ConformalRegressor] = None,
+    conformal_alpha: float = 0.1,
 ) -> Dict[str, float]:
     """Validate D-MPNN deep ensemble.
 
@@ -150,6 +169,12 @@ def validate_gnn_ensemble(
         device: Device to run inference on.
         log_to_wandb: Whether to log metrics to wandb.
         prefix: Prefix for metric names.
+        conformal: Optional calibrated conformal regressor. When provided,
+            empirical interval coverage and width are reported at
+            ``conformal_alpha``. The ensemble std is used as the per-sample
+            uncertainty for the normalized score.
+        conformal_alpha: Miscoverage level for conformal interval evaluation
+            (e.g. 0.1 for 90% intervals).
 
     Returns:
         Dictionary of metrics including ensemble uncertainty.
@@ -188,6 +213,12 @@ def validate_gnn_ensemble(
     metrics = compute_metrics(predictions, targets)
     calibration = compute_calibration_metrics(predictions, uncertainties, targets)
     metrics.update(calibration)
+
+    if conformal is not None:
+        conformal_metrics = evaluate_conformal_intervals(
+            conformal, predictions, targets, uncertainties, alpha=conformal_alpha
+        )
+        metrics.update(conformal_metrics)
 
     metrics = {f"{prefix}/{k}": v for k, v in metrics.items()}
 

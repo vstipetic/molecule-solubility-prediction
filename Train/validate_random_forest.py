@@ -11,6 +11,8 @@ import wandb
 
 from Models.random_forest import ECFPRandomForest
 from DataUtils.metrics import compute_metrics, compute_calibration_metrics
+from UQ.conformal import ConformalRegressor
+from UQ.evaluate import evaluate_conformal_intervals
 
 
 def validate_random_forest(
@@ -50,6 +52,8 @@ def validate_random_forest_with_uncertainty(
     targets: np.ndarray,
     log_to_wandb: bool = True,
     prefix: str = "val",
+    conformal: Optional[ConformalRegressor] = None,
+    conformal_alpha: float = 0.1,
 ) -> Dict[str, float]:
     """Validate Random Forest with uncertainty estimation.
 
@@ -61,6 +65,12 @@ def validate_random_forest_with_uncertainty(
         targets: Ground truth solubility values.
         log_to_wandb: Whether to log metrics to wandb.
         prefix: Prefix for metric names.
+        conformal: Optional calibrated conformal regressor. When provided,
+            empirical interval coverage and width are reported at
+            ``conformal_alpha``. The tree-variance std is used as the
+            per-sample uncertainty for the normalized score.
+        conformal_alpha: Miscoverage level for conformal interval evaluation
+            (e.g. 0.1 for 90% intervals).
 
     Returns:
         Dictionary of metrics including calibration metrics.
@@ -73,6 +83,13 @@ def validate_random_forest_with_uncertainty(
     # Calibration metrics
     calibration = compute_calibration_metrics(mean_preds, std_preds, targets)
     metrics.update(calibration)
+
+    # Conformal interval metrics (optional)
+    if conformal is not None:
+        conformal_metrics = evaluate_conformal_intervals(
+            conformal, mean_preds, targets, std_preds, alpha=conformal_alpha
+        )
+        metrics.update(conformal_metrics)
 
     # Add prefix
     metrics = {f"{prefix}/{k}": v for k, v in metrics.items()}
@@ -90,6 +107,8 @@ def evaluate_on_splits(
     test_data: Optional[Tuple[List[str], np.ndarray]] = None,
     with_uncertainty: bool = True,
     log_to_wandb: bool = True,
+    conformal: Optional[ConformalRegressor] = None,
+    conformal_alpha: float = 0.1,
 ) -> Dict[str, Dict[str, float]]:
     """Evaluate model on train, validation, and optionally test splits.
 
@@ -100,17 +119,25 @@ def evaluate_on_splits(
         test_data: Optional tuple of (smiles_list, targets) for test set.
         with_uncertainty: Whether to compute uncertainty metrics.
         log_to_wandb: Whether to log to wandb.
+        conformal: Optional calibrated conformal regressor forwarded to the
+            uncertainty validator for interval evaluation. Only used when
+            ``with_uncertainty`` is True.
+        conformal_alpha: Miscoverage level for conformal interval evaluation.
 
     Returns:
         Dictionary of metrics for each split.
     """
     results = {}
 
-    validate_fn = (
-        validate_random_forest_with_uncertainty
-        if with_uncertainty
-        else validate_random_forest
-    )
+    if with_uncertainty:
+        def validate_fn(m, smiles, tgts, log_to_wandb, prefix):
+            return validate_random_forest_with_uncertainty(
+                m, smiles, tgts,
+                log_to_wandb=log_to_wandb, prefix=prefix,
+                conformal=conformal, conformal_alpha=conformal_alpha,
+            )
+    else:
+        validate_fn = validate_random_forest
 
     # Train set (for checking overfitting)
     results['train'] = validate_fn(

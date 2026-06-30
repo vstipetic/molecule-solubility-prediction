@@ -100,34 +100,24 @@ def get_scaffold(smiles: str) -> str:
     return Chem.MolToSmiles(scaffold)
 
 
-def scaffold_split(
+def _assign_scaffold_splits(
     smiles_list: List[str],
-    labels: np.ndarray,
-    train_ratio: float = 0.8,
-    val_ratio: float = 0.1,
-    random_state: int = 42,
-) -> Tuple[
-    Tuple[List[str], np.ndarray],
-    Tuple[List[str], np.ndarray],
-    Tuple[List[str], np.ndarray],
-]:
-    """Split data based on molecular scaffolds.
+    split_sizes: List[int],
+) -> List[List[int]]:
+    """Group molecules by Murcko scaffold and assign whole groups to splits.
 
-    Molecules with the same scaffold will be in the same split to prevent
-    data leakage between train/val/test sets.
+    Scaffold groups are sorted largest-first and greedily placed into the
+    first split that has not yet reached its target size. The final split
+    acts as the overflow bucket, so its target size is ignored.
 
     Args:
         smiles_list: List of SMILES strings.
-        labels: Numpy array of labels (solubility values).
-        train_ratio: Fraction of data for training.
-        val_ratio: Fraction of data for validation.
-        random_state: Random seed for reproducibility.
+        split_sizes: Target size for each split. The last entry is treated
+            as an overflow bucket and receives all remaining molecules.
 
     Returns:
-        Three tuples of (smiles_list, labels) for train, val, and test sets.
+        List of index lists, one per requested split.
     """
-    np.random.seed(random_state)
-
     # Group molecules by scaffold
     scaffold_to_indices: dict[str, List[int]] = {}
     for idx, smiles in enumerate(smiles_list):
@@ -140,36 +130,70 @@ def scaffold_split(
     scaffold_sets = list(scaffold_to_indices.values())
     scaffold_sets.sort(key=lambda x: len(x), reverse=True)
 
-    # Assign scaffolds to splits
-    train_indices: List[int] = []
-    val_indices: List[int] = []
-    test_indices: List[int] = []
+    n_splits = len(split_sizes)
+    splits: List[List[int]] = [[] for _ in range(n_splits)]
+
+    for scaffold_indices in scaffold_sets:
+        for s in range(n_splits):
+            # Last split is the overflow bucket; otherwise fill until target.
+            if s == n_splits - 1 or len(splits[s]) < split_sizes[s]:
+                splits[s].extend(scaffold_indices)
+                break
+
+    return splits
+
+
+def scaffold_split(
+    smiles_list: List[str],
+    labels: np.ndarray,
+    train_ratio: float = 0.8,
+    val_ratio: float = 0.1,
+    calib_ratio: float = 0.0,
+    random_state: int = 42,
+) -> Tuple[Tuple[List[str], np.ndarray], ...]:
+    """Split data based on molecular scaffolds.
+
+    Molecules with the same scaffold will be in the same split to prevent
+    data leakage between sets.
+
+    By default this produces a three-way train/val/test split. When
+    ``calib_ratio`` is greater than zero, a dedicated calibration split is
+    inserted before the test split (train/val/calib/test), which is used to
+    fit conformal predictors without touching train, val, or test.
+
+    Args:
+        smiles_list: List of SMILES strings.
+        labels: Numpy array of labels (solubility values).
+        train_ratio: Fraction of data for training.
+        val_ratio: Fraction of data for validation.
+        calib_ratio: Fraction of data for the conformal calibration set.
+            If 0.0 (default), no calibration split is created.
+        random_state: Random seed for reproducibility.
+
+    Returns:
+        If ``calib_ratio == 0``: three (smiles_list, labels) tuples for
+        train, val, and test.
+        If ``calib_ratio > 0``: four (smiles_list, labels) tuples for
+        train, val, calib, and test.
+    """
+    np.random.seed(random_state)
 
     n_total = len(smiles_list)
     train_size = int(n_total * train_ratio)
     val_size = int(n_total * val_ratio)
 
-    for scaffold_indices in scaffold_sets:
-        if len(train_indices) < train_size:
-            train_indices.extend(scaffold_indices)
-        elif len(val_indices) < val_size:
-            val_indices.extend(scaffold_indices)
-        else:
-            test_indices.extend(scaffold_indices)
+    if calib_ratio > 0.0:
+        calib_size = int(n_total * calib_ratio)
+        # Last size (test) is overflow and ignored by the assignment helper.
+        split_sizes = [train_size, val_size, calib_size, n_total]
+    else:
+        split_sizes = [train_size, val_size, n_total]
 
-    # Create output arrays
-    train_smiles = [smiles_list[i] for i in train_indices]
-    val_smiles = [smiles_list[i] for i in val_indices]
-    test_smiles = [smiles_list[i] for i in test_indices]
+    split_indices = _assign_scaffold_splits(smiles_list, split_sizes)
 
-    train_labels = labels[train_indices]
-    val_labels = labels[val_indices]
-    test_labels = labels[test_indices]
-
-    return (
-        (train_smiles, train_labels),
-        (val_smiles, val_labels),
-        (test_smiles, test_labels),
+    return tuple(
+        ([smiles_list[i] for i in indices], labels[indices])
+        for indices in split_indices
     )
 
 
